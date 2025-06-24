@@ -4,6 +4,9 @@
 #
 
 cmake_minimum_required(VERSION 3.10)
+
+option(LIBWSC_ENABLE_INSTALL "Enable installation of libwsc" ON)
+
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake;${CMAKE_MODULE_PATH}")
 project(libwsc 
   VERSION 1.0.0
@@ -81,20 +84,22 @@ set_target_properties(libwsc PROPERTIES
   SOVERSION ${PROJECT_VERSION_MAJOR}
 )
 
-install(TARGETS libwsc
-  EXPORT libwscTargets
-  ARCHIVE DESTINATION lib
-  LIBRARY DESTINATION lib
-  RUNTIME DESTINATION bin
-)
+if (LIBWSC_ENABLE_INSTALL)
+  install(TARGETS libwsc
+    EXPORT libwscTargets
+    ARCHIVE DESTINATION lib
+    LIBRARY DESTINATION lib
+    RUNTIME DESTINATION bin
+  )
 
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/libwsc/
-  DESTINATION include/libwsc
-  FILES_MATCHING PATTERN "*.h"
-)
+  install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/libwsc/
+    DESTINATION include/libwsc
+    FILES_MATCHING PATTERN "*.h"
+  )
 
-install(EXPORT libwscTargets
-  FILE libwscConfig.cmake
-  NAMESPACE libwsc::
-  DESTINATION lib/cmake/libwsc
-)
+  install(EXPORT libwscTargets
+    FILE libwscConfig.cmake
+    NAMESPACE libwsc::
+    DESTINATION lib/cmake/libwsc
+  )
+endif()
