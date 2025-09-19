@@ -81,6 +81,15 @@ set_target_properties(libwsc PROPERTIES
   SOVERSION ${PROJECT_VERSION_MAJOR}
 )
 
+# Build example executables
+add_executable(autobahn examples/autobahn.cpp)
+target_include_directories(autobahn PRIVATE libwsc)
+target_link_libraries(autobahn libwsc pthread)
+
+add_executable(threads examples/threads.cpp)
+target_include_directories(threads PRIVATE libwsc)
+target_link_libraries(threads libwsc pthread)
+
 install(TARGETS libwsc
   EXPORT libwscTargets
   ARCHIVE DESTINATION lib
