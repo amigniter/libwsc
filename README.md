@@ -9,9 +9,9 @@ Written solely for [mod_audio_stream](https://github.com/amigniter/mod_audio_str
 
 Built on libevent; only zlib (for deflate) and OpenSSL (for TLS) are optional extras.
 
-**libwsc** is now offered as a standalone, fully RFC-6455 and [autobahn-testsuite](https://github.com/crossbario/autobahn-testsuite) compliant asynchronous client library. You can find test results [here](https://amigniter.github.io/libwsc/autobahn/index.html) (except test 2.1, we support one ping per-flight)
+**libwsc** is now offered as a standalone, fully RFC-6455–compliant and [Autobahn Testsuite](https://github.com/crossbario/autobahn-testsuite)-validated asynchronous client library.
 
----
+It passes the Autobahn WebSocket Testsuite (including permessage-deflate) with performance comparable to or exceeding common C/C++ clients. You can find the test results [here](https://amigniter.github.io/libwsc/autobahn/index.html). The _examples/autobahn.cpp_ example can be used to run the Autobahn Testsuite locally and reproduce the results.
 
 ## Features
 
@@ -32,8 +32,11 @@ Built on libevent; only zlib (for deflate) and OpenSSL (for TLS) are optional ex
 * Clear separation between public API and internal implementation
 * Robust connection lifecycle handling (connect, disconnect, shutdown)
 * TLS support fully encapsulated inside the library
-
----
+* **Threading model**
+  * All libevent / bufferevent operations are executed on a single internal event thread.
+  * Public API methods are safe to call from any thread; they enqueue work to the event loop.
+  * User callbacks are invoked on the event thread.
+  * The context object is managed via `std::shared_ptr` and keeps itself alive while async operations are in flight.
 
 ## Requirements
 
