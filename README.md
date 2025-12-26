@@ -15,14 +15,23 @@ Built on libevent; only zlib (for deflate) and OpenSSL (for TLS) are optional ex
 
 ## Features
 
-* RFC6455 compliant handshake, framing, masking, and control frames
+* RFC 6455–compliant handshake, framing, masking, and control frames
 * Per-message deflate compression
-* Asynchronous reads/writes via **libevent** (`bufferevent`)
-* Optional TLS/SSL support using **OpenSSL**
-* UTF-8 validation per WebSocket spec
-* Fully thread-safe: concurrent connect/disconnect/send/receive
+* Event-driven, asynchronous I/O using libevent (`bufferevent`)
+* Optional TLS/SSL support via OpenSSL (handled internally)
+* UTF-8 validation per WebSocket specification
+* **Fully thread-safe design** (concurrent connect / disconnect / send / receive)
+* Clear separation between public API and internal implementation
 * CMake-based build for portability
-* Very small footprint, ≈78 KB stripped on x86_64 Linux (Release)
+* **Very small footprint**: ~110 KB stripped shared library on x86_64 Linux (Release)
+
+### What’s new in v1.1.0
+
+* Completely redesigned internal architecture based on an event-driven model
+* Thread-safe client API with internal serialization and state management
+* Clear separation between public API and internal implementation
+* Robust connection lifecycle handling (connect, disconnect, shutdown)
+* TLS support fully encapsulated inside the library
 
 ---
 
