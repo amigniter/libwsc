@@ -335,6 +335,14 @@ void WebSocketReceiver::onData(evbuffer* buf) {
             return;
         }
 
+        // RFC 7692 §6: the per-message-deflate RSV1 bit may only appear on the
+        // first frame of a message. It is illegal on control frames and on
+        // continuation frames even when compression is negotiated.
+        if (rsv1 && ((opcode & 0x08) != 0 || opcode == 0x00)) {
+            _sinks.onRxProtocolError(1002, "RSV1 set on control or continuation frame");
+            return;
+        }
+
         if ((opcode & 0x08) != 0 && !fin) {
             _sinks.onRxProtocolError(1002, "Control frame fragmented");
             return;
