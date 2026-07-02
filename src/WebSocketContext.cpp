@@ -182,9 +182,16 @@ void WebSocketContext::run() {
         if (!_cfg.tls.disableHostnameValidation) {
             X509_VERIFY_PARAM* param = SSL_get0_param(ssl);
             if (param) {
-                int ret = X509_VERIFY_PARAM_set1_host(param, _cfg.host.c_str(), 0);  // No port matching
+                // For an IP-literal endpoint the peer identity must be checked
+                // against the certificate's iPAddress SANs (set1_ip), not its
+                // dNSName SANs (set1_host); using set1_host on an IP would mis-
+                // validate. Hostnames use set1_host.
+                int ret = _cfg.is_ip_address
+                    ? X509_VERIFY_PARAM_set1_ip_asc(param, _cfg.host.c_str())
+                    : X509_VERIFY_PARAM_set1_host(param, _cfg.host.c_str(), 0);  // No port matching
                 if (ret != 1) {
-                    log_error("Failed to set hostname for verification");
+                    log_error("Failed to set %s for verification",
+                              _cfg.is_ip_address ? "IP address" : "hostname");
                     sendError(ErrorCode::TLS_INIT_FAILED, "Failed hostname verification setup");
                     SSL_free(ssl);
                     _tls.reset();
