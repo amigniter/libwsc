@@ -619,13 +619,18 @@ void WebSocketContext::handleRead(bufferevent* bev) {
 
     if (!upgraded.load()) {
 
+        // Cap the pre-upgrade handshake response. Without this a server could
+        // stream header bytes forever (never sending the terminating CRLFCRLF),
+        // growing this buffer and re-scanning it from the start on every read.
+        static constexpr size_t MAX_HANDSHAKE_BYTES = 64u * 1024u;
+
         const size_t len = evbuffer_get_length(input);
         if (len < 4) return;
 
         std::vector<char> snap(len);
         evbuffer_copyout(input, snap.data(), len);
         const char* b = snap.data();
-            
+
         // Find end of headers: "\r\n\r\n" (length-bounded)
         size_t headerBytes = 0;
         for (size_t i = 0; i + 3 < len; ++i) {
@@ -634,7 +639,17 @@ void WebSocketContext::handleRead(bufferevent* bev) {
                 break;
             }
         }
-        if (headerBytes == 0) return;
+        if (headerBytes == 0) {
+            if (len > MAX_HANDSHAKE_BYTES) {
+                log_error("handshake response exceeded %zu bytes without header terminator",
+                          static_cast<size_t>(MAX_HANDSHAKE_BYTES));
+                connection_state.store(ConnectionState::FAILED, std::memory_order_release);
+                sendError(ErrorCode::CONNECT_FAILED, "handshake response too large");
+                evbuffer_drain(input, len);
+                requestLoopExit();
+            }
+            return; // wait for more header bytes
+        }
         std::string resp(b, headerBytes);
 
         //log_debug("RESP: %s", resp.c_str());
