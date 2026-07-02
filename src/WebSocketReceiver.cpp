@@ -364,6 +364,14 @@ void WebSocketReceiver::onData(evbuffer* buf) {
             return;
         }
 
+        // Bound a single data/continuation frame so a peer-declared 64-bit length
+        // cannot make us buffer (and reserve/copy) unbounded memory before the
+        // frame is even complete. Control frames are already capped at 125 above.
+        if ((opcode & 0x08) == 0 && payload_len > MAX_MESSAGE_SIZE) {
+            _sinks.onRxProtocolError(1009, "Frame payload too large");
+            return;
+        }
+
         const size_t need = header_len + static_cast<size_t>(payload_len);
         if (data_len < need) break; // wait for full frame
 
@@ -409,6 +417,13 @@ void WebSocketReceiver::handleContinuationFrame(const unsigned char* payload, si
     if (!message_in_progress) {
         log_error("Received continuation frame without initial frame");
         _sinks.onRxProtocolError(1002, "continuation frame without initial frame");
+        return;
+    }
+
+    if (payload_len > MAX_MESSAGE_SIZE - fragmented_message.size()) {
+        log_error("reassembled message exceeds %zu bytes; aborting",
+                  static_cast<size_t>(MAX_MESSAGE_SIZE));
+        _sinks.onRxProtocolError(1009, "Message too large");
         return;
     }
 
