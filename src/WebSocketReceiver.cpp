@@ -279,6 +279,11 @@ bool WebSocketReceiver::rxInflate(const uint8_t* in, size_t in_len, std::vector<
         
         if (produced) {
             const size_t old = out.size();
+            if (produced > MAX_MESSAGE_SIZE - old) {
+                log_error("permessage-deflate output exceeds %zu bytes; aborting (possible decompression bomb)",
+                          static_cast<size_t>(MAX_MESSAGE_SIZE));
+                return false;
+            }
             out.resize(old + produced);
             std::memcpy(out.data() + old, tmp, produced);
         }

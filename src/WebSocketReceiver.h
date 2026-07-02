@@ -79,4 +79,10 @@ private:
 
     Utf8Validator utf8Validator;
     bool isValidUtf8(const char *str, size_t len);
+
+    // Upper bound on a fully reassembled / inflated message. permessage-deflate
+    // lets a tiny frame expand without limit (a decompression bomb), so the
+    // inflate output is capped here. Audio-stream control/media messages are a
+    // few KB; 16 MiB is generous headroom while keeping memory bounded.
+    static constexpr size_t MAX_MESSAGE_SIZE = 16u * 1024u * 1024u;
 };
