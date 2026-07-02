@@ -839,28 +839,45 @@ void WebSocketContext::flushSendQueue() {
     }
 }
 
+// Strip CR/LF/NUL from a value interpolated into a request line, so a
+// configured URI/host/header cannot inject additional handshake headers or
+// smuggle a second request (header/request splitting).
+static std::string stripCRLF(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        if (c != '\r' && c != '\n' && c != '\0') out.push_back(c);
+    }
+    return out;
+}
+
 void WebSocketContext::sendHandshakeRequest() {
     if (!_bev) return;
     log_debug("Sending WebSocket handshake request");
 
     auto out = bufferevent_get_output(_bev);
 
-    evbuffer_add_printf(out, "GET %s HTTP/1.1\r\n", _cfg.uri.c_str());
-    evbuffer_add_printf(out, "Host:%s:%d\r\n", _cfg.host.c_str(), _cfg.port);
+    const std::string uri  = stripCRLF(_cfg.uri);
+    const std::string host = stripCRLF(_cfg.host);
+
+    evbuffer_add_printf(out, "GET %s HTTP/1.1\r\n", uri.c_str());
+    evbuffer_add_printf(out, "Host:%s:%d\r\n", host.c_str(), _cfg.port);
     evbuffer_add_printf(out, "Upgrade:websocket\r\n");
     evbuffer_add_printf(out, "Connection:upgrade\r\n");
     evbuffer_add_printf(out, "Sec-WebSocket-Key:%s\r\n", key.c_str());
     evbuffer_add_printf(out, "Sec-WebSocket-Version:13\r\n");
-    
+
     if (_cfg.compression_requested) {
         evbuffer_add_printf(out, "Sec-WebSocket-Extensions:permessage-deflate; client_no_context_takeover; server_no_context_takeover; client_max_window_bits=9\r\n");
     }
 
-    evbuffer_add_printf(out, "Origin:http://%s:%d\r\n", _cfg.host.c_str(), _cfg.port);
-    
+    evbuffer_add_printf(out, "Origin:http://%s:%d\r\n", host.c_str(), _cfg.port);
+
     if (!_cfg.headers.headers.empty()) {
         for (const auto& header : _cfg.headers.headers) {
-            evbuffer_add_printf(out, "%s:%s\r\n", header.first.c_str(), header.second.c_str());
+            evbuffer_add_printf(out, "%s:%s\r\n",
+                                stripCRLF(header.first).c_str(),
+                                stripCRLF(header.second).c_str());
         }
     }
 
