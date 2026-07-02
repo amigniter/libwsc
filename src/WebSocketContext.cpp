@@ -1072,9 +1072,13 @@ void WebSocketContext::send(evbuffer* buf, const void* raw_data, size_t raw_len,
 
     thread_local uint32_t s = 0;
     if (s == 0) {
-        uint64_t t = static_cast<uint64_t>(time(nullptr));
-        uintptr_t a = reinterpret_cast<uintptr_t>(&s);
-        s = static_cast<uint32_t>((t ^ (t >> 32) ^ a) | 1u);
+        // RFC 6455 §5.3: the masking key must be unpredictable. Seed the
+        // per-frame PRNG from a strong entropy source (as getWebSocketKey does
+        // for the handshake nonce) rather than time()+stack-address, which is
+        // guessable. The splitmix step below then produces per-frame masks
+        // without a syscall per frame.
+        std::random_device rd;
+        s = (static_cast<uint32_t>(rd()) ^ static_cast<uint32_t>(rd())) | 1u;
     }
 
     auto next_u32 = [&]() -> uint32_t {
