@@ -639,10 +639,32 @@ void WebSocketContext::handleRead(bufferevent* bev) {
 
         //log_debug("RESP: %s", resp.c_str());
 
-        if (resp.find("HTTP/1.1 101", 0) == std::string::npos ||
-            !containsHeader(resp, "Sec-WebSocket-Accept:"))
+        // RFC 6455 §4.1: the client MUST fail the connection unless the response
+        // is 101 AND Sec-WebSocket-Accept equals base64(SHA1(key + GUID)).
+        // Accepting on mere header presence would let any 101-returning endpoint
+        // (a stray HTTP responder, a cache, an off-path injector) masquerade as a
+        // valid WebSocket peer. `accept` was computed from our nonce at construction.
+        auto headerValue = [&resp](const char* lowerName) -> std::string {
+            std::string lower = resp;
+            std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+            const size_t p = lower.find(lowerName);
+            if (p == std::string::npos) return std::string();
+            const size_t vstart = p + std::char_traits<char>::length(lowerName);
+            size_t lineEnd = resp.find("\r\n", vstart);
+            if (lineEnd == std::string::npos) lineEnd = resp.size();
+            // Value from the original-case buffer (base64 is case-sensitive), trimmed.
+            const size_t a = resp.find_first_not_of(" \t", vstart);
+            if (a == std::string::npos || a >= lineEnd) return std::string();
+            size_t b = lineEnd;
+            while (b > a && (resp[b - 1] == ' ' || resp[b - 1] == '\t' || resp[b - 1] == '\r')) --b;
+            return resp.substr(a, b - a);
+        };
+
+        const bool is101 = resp.find("HTTP/1.1 101", 0) != std::string::npos;
+        const std::string acceptValue = headerValue("sec-websocket-accept:");
+        if (!is101 || acceptValue.empty() || acceptValue != accept)
         {
-            log_error("WebSocket upgrade failed");
+            log_error("WebSocket upgrade failed (status/accept mismatch)");
             connection_state.store(ConnectionState::FAILED, std::memory_order_release);
             sendError(ErrorCode::CONNECT_FAILED, "WebSocket upgrade failed");
             evbuffer_drain(input, len);
