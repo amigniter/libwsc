@@ -353,7 +353,21 @@ void WebSocketContext::timeoutCallback(evutil_socket_t /*fd*/, short /*event*/, 
 
 void WebSocketContext::pingCallback(evutil_socket_t /*fd*/, short /*event*/, void *arg) {
     auto* self = static_cast<WebSocketContext*>(arg);
+    // Heartbeat only runs after the upgrade; sendPing() is a no-op before then.
+    if (!self->upgraded.load(std::memory_order_acquire)) return;
+
+    // If earlier pings have gone unanswered for MAX_MISSED_PONGS intervals the
+    // peer is half-open (TCP up, no application response). Declare the
+    // connection dead, mirroring the fatal-error teardown in handleEvent.
+    if (self->pings_outstanding >= MAX_MISSED_PONGS) {
+        log_error("ping timeout: %d unanswered ping(s)", self->pings_outstanding);
+        self->sendError(ErrorCode::PING_TIMEOUT, "Ping timeout (no pong)");
+        self->connection_state.store(ConnectionState::DISCONNECTING, std::memory_order_release);
+        self->requestLoopExit();
+        return;
+    }
     self->sendPing();
+    self->pings_outstanding++;
 }
 
 void WebSocketContext::wakeupCallback(evutil_socket_t, short, void* arg) {
@@ -1236,6 +1250,8 @@ bool WebSocketContext::rxCompressionEnabled() const {
 void WebSocketContext::onRxPong(std::vector<uint8_t>&& payload) {
     log_debug("Received pong frame (%zu bytes)", payload.size());
     (void)payload;
+    // Peer is alive; reset the heartbeat liveness counter.
+    pings_outstanding = 0;
 }
 
 void WebSocketContext::onRxPing(std::vector<uint8_t>&& payload) {
