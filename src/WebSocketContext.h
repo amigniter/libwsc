@@ -219,6 +219,10 @@ private:
     struct event *ping_event = nullptr;
     struct event *wakeup_event = nullptr;
 
+    // Ping liveness
+    int pings_outstanding = 0;
+    static constexpr int MAX_MISSED_PONGS = 2;
+
     // Sender
     struct event *send_event = nullptr;
     std::atomic_bool send_flush_pending{false};

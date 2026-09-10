@@ -79,4 +79,6 @@ private:
 
     Utf8Validator utf8Validator;
     bool isValidUtf8(const char *str, size_t len);
+
+    static constexpr size_t MAX_MESSAGE_SIZE = 16u * 1024u * 1024u;
 };

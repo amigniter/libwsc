@@ -182,10 +182,15 @@ void WebSocketContext::run() {
         if (!_cfg.tls.disableHostnameValidation) {
             X509_VERIFY_PARAM* param = SSL_get0_param(ssl);
             if (param) {
-                int ret = X509_VERIFY_PARAM_set1_host(param, _cfg.host.c_str(), 0);  // No port matching
+                // Verify IP addresses against IP SANs, hostnames against DNS SANs.
+                int ret = _cfg.is_ip_address
+                    ? X509_VERIFY_PARAM_set1_ip_asc(param, _cfg.host.c_str())
+                    : X509_VERIFY_PARAM_set1_host(param, _cfg.host.c_str(), 0);
                 if (ret != 1) {
-                    log_error("Failed to set hostname for verification");
-                    sendError(ErrorCode::TLS_INIT_FAILED, "Failed hostname verification setup");
+                    log_error("Failed to set %s for verification",
+                              _cfg.is_ip_address ? "IP address" : "hostname");
+                    sendError(ErrorCode::TLS_INIT_FAILED,
+                              _cfg.is_ip_address ? "Failed IP address verification setup" : "Failed hostname verification setup");
                     SSL_free(ssl);
                     _tls.reset();
                     return;
@@ -346,7 +351,19 @@ void WebSocketContext::timeoutCallback(evutil_socket_t /*fd*/, short /*event*/, 
 
 void WebSocketContext::pingCallback(evutil_socket_t /*fd*/, short /*event*/, void *arg) {
     auto* self = static_cast<WebSocketContext*>(arg);
+    // Heartbeat only runs after the WebSocket upgrade.
+    if (!self->upgraded.load(std::memory_order_acquire)) return;
+
+    // Disconnect after too many unanswered pings.
+    if (self->pings_outstanding >= MAX_MISSED_PONGS) {
+        log_error("ping timeout: %d unanswered ping(s)", self->pings_outstanding);
+        self->sendError(ErrorCode::PING_TIMEOUT, "Ping timeout (no pong)");
+        self->connection_state.store(ConnectionState::DISCONNECTING, std::memory_order_release);
+        self->requestLoopExit();
+        return;
+    }
     self->sendPing();
+    self->pings_outstanding++;
 }
 
 void WebSocketContext::wakeupCallback(evutil_socket_t, short, void* arg) {
@@ -619,30 +636,122 @@ void WebSocketContext::handleRead(bufferevent* bev) {
 
     if (!upgraded.load()) {
 
+        static constexpr size_t MAX_HANDSHAKE_BYTES = 64u * 1024u;
+
         const size_t len = evbuffer_get_length(input);
         if (len < 4) return;
 
-        std::vector<char> snap(len);
-        evbuffer_copyout(input, snap.data(), len);
-        const char* b = snap.data();
-            
-        // Find end of headers: "\r\n\r\n" (length-bounded)
-        size_t headerBytes = 0;
-        for (size_t i = 0; i + 3 < len; ++i) {
-            if (b[i] == '\r' && b[i+1] == '\n' && b[i+2] == '\r' && b[i+3] == '\n') {
-                headerBytes = i + 4;
-                break;
+        const evbuffer_ptr headerEnd = evbuffer_search(input, "\r\n\r\n", 4, nullptr);
+
+        if (headerEnd.pos < 0) {
+            if (len > MAX_HANDSHAKE_BYTES) {
+                log_error("handshake response exceeded %zu bytes without header terminator",
+                          static_cast<size_t>(MAX_HANDSHAKE_BYTES));
+                connection_state.store(ConnectionState::FAILED, std::memory_order_release);
+                sendError(ErrorCode::CONNECT_FAILED, "handshake response too large");
+                evbuffer_drain(input, len);
+                requestLoopExit();
             }
+            return; // wait for more header bytes
         }
-        if (headerBytes == 0) return;
+
+        const size_t headerBytes = static_cast<size_t>(headerEnd.pos) + 4;
+
+        if (headerBytes > MAX_HANDSHAKE_BYTES) {
+            log_error("handshake response exceeded %zu bytes",
+                      static_cast<size_t>(MAX_HANDSHAKE_BYTES));
+
+            connection_state.store(ConnectionState::FAILED,
+                                   std::memory_order_release);
+
+            sendError(ErrorCode::CONNECT_FAILED,
+                      "handshake response too large");
+
+            evbuffer_drain(input, len);
+            requestLoopExit();
+            return;
+        }
+
+        // Copy only the HTTP handshake headers, not any WebSocket data
+        // that may already follow in the same input buffer.
+        std::vector<char> snap(headerBytes);
+        evbuffer_copyout(input, snap.data(), headerBytes);
+
+        const char* b = snap.data();
+
         std::string resp(b, headerBytes);
 
         //log_debug("RESP: %s", resp.c_str());
 
-        if (resp.find("HTTP/1.1 101", 0) == std::string::npos ||
-            !containsHeader(resp, "Sec-WebSocket-Accept:"))
+        // RFC 6455: validate the HTTP 101 status and Sec-WebSocket-Accept value.
+        auto headerValue = [&resp](const std::string& expectedName) -> std::string {
+            size_t pos = 0;
+
+            while (pos < resp.size()) {
+                size_t lineEnd = resp.find("\r\n", pos);
+                if (lineEnd == std::string::npos) {
+                    lineEnd = resp.size();
+                }
+
+                if (lineEnd == pos) {
+                    break;
+                }
+
+                const size_t colon = resp.find(':', pos);
+
+                if (colon != std::string::npos && colon < lineEnd) {
+                    std::string headerName = resp.substr(pos, colon - pos);
+
+                    std::transform(
+                        headerName.begin(),
+                        headerName.end(),
+                        headerName.begin(),
+                        [](unsigned char c) {
+                            return static_cast<char>(std::tolower(c));
+                        });
+
+                    if (headerName == expectedName) {
+                        size_t valueStart = colon + 1;
+
+                        while (valueStart < lineEnd &&
+                            (resp[valueStart] == ' ' || resp[valueStart] == '\t')) {
+                            ++valueStart;
+                        }
+
+                        size_t valueEnd = lineEnd;
+
+                        while (valueEnd > valueStart &&
+                            (resp[valueEnd - 1] == ' ' ||
+                                resp[valueEnd - 1] == '\t')) {
+                            --valueEnd;
+                        }
+
+                        return resp.substr(valueStart, valueEnd - valueStart);
+                    }
+                }
+
+                if (lineEnd == resp.size()) {
+                    break;
+                }
+
+                pos = lineEnd + 2;
+            }
+
+            return {};
+        };
+
+        const size_t statusEnd = resp.find("\r\n");
+
+        const bool is101 = statusEnd != std::string::npos &&
+                            resp.size() >= 12 &&
+                            resp.compare(0, 12, "HTTP/1.1 101") == 0 &&
+                            (statusEnd == 12 || resp[12] == ' ' || resp[12] == '\t');
+
+        const std::string acceptValue = headerValue("sec-websocket-accept");
+
+        if (!is101 || acceptValue.empty() || acceptValue != accept)
         {
-            log_error("WebSocket upgrade failed");
+            log_error("WebSocket upgrade failed (status/accept mismatch)");
             connection_state.store(ConnectionState::FAILED, std::memory_order_release);
             sendError(ErrorCode::CONNECT_FAILED, "WebSocket upgrade failed");
             evbuffer_drain(input, len);
@@ -653,14 +762,9 @@ void WebSocketContext::handleRead(bufferevent* bev) {
         bool negotiated = false;
         
         if (_cfg.compression_requested) {
-            std::string lowerResp = resp;
-            std::transform(lowerResp.begin(), lowerResp.end(), lowerResp.begin(), ::tolower);
-            const std::string key = "sec-websocket-extensions:";
-            size_t extHeaderPos = lowerResp.find(key);
-            if (extHeaderPos != std::string::npos) {
-                size_t lineEnd = resp.find("\r\n", extHeaderPos);
-                if (lineEnd == std::string::npos) lineEnd = resp.size();
-                std::string extLine = resp.substr(extHeaderPos, lineEnd - extHeaderPos);
+            const std::string extLine = headerValue("sec-websocket-extensions");
+
+            if (!extLine.empty()) {
 
                 if (containsHeader(extLine, "permessage-deflate")) {
                     negotiated = true;
@@ -795,9 +899,38 @@ void WebSocketContext::flushSendQueue() {
     }
 }
 
+static bool hasInvalidHandshakeChars(const std::string& s) {
+    return s.find('\r') != std::string::npos ||
+           s.find('\n') != std::string::npos ||
+           s.find('\0') != std::string::npos;
+}
+
 void WebSocketContext::sendHandshakeRequest() {
     if (!_bev) return;
+
     log_debug("Sending WebSocket handshake request");
+
+    if (hasInvalidHandshakeChars(_cfg.uri) ||
+        hasInvalidHandshakeChars(_cfg.host)) {
+
+        log_error("Invalid CR/LF/NUL character in WebSocket URI or host");
+        sendError(ErrorCode::CONNECT_FAILED,
+                  "Invalid WebSocket handshake configuration");
+        requestLoopExit();
+        return;
+    }
+
+    for (const auto& header : _cfg.headers.headers) {
+        if (hasInvalidHandshakeChars(header.first) ||
+            hasInvalidHandshakeChars(header.second)) {
+
+            log_error("Invalid CR/LF/NUL character in WebSocket header");
+            sendError(ErrorCode::CONNECT_FAILED,
+                      "Invalid WebSocket handshake header");
+            requestLoopExit();
+            return;
+        }
+    }
 
     auto out = bufferevent_get_output(_bev);
 
@@ -807,21 +940,29 @@ void WebSocketContext::sendHandshakeRequest() {
     evbuffer_add_printf(out, "Connection:upgrade\r\n");
     evbuffer_add_printf(out, "Sec-WebSocket-Key:%s\r\n", key.c_str());
     evbuffer_add_printf(out, "Sec-WebSocket-Version:13\r\n");
-    
+
     if (_cfg.compression_requested) {
-        evbuffer_add_printf(out, "Sec-WebSocket-Extensions:permessage-deflate; client_no_context_takeover; server_no_context_takeover; client_max_window_bits=9\r\n");
+        evbuffer_add_printf(
+            out,
+            "Sec-WebSocket-Extensions:permessage-deflate; "
+            "client_no_context_takeover; "
+            "server_no_context_takeover; "
+            "client_max_window_bits=9\r\n");
     }
 
-    evbuffer_add_printf(out, "Origin:http://%s:%d\r\n", _cfg.host.c_str(), _cfg.port);
-    
-    if (!_cfg.headers.headers.empty()) {
-        for (const auto& header : _cfg.headers.headers) {
-            evbuffer_add_printf(out, "%s:%s\r\n", header.first.c_str(), header.second.c_str());
-        }
+    evbuffer_add_printf(out,
+                       "Origin:http://%s:%d\r\n",
+                       _cfg.host.c_str(),
+                       _cfg.port);
+
+    for (const auto& header : _cfg.headers.headers) {
+        evbuffer_add_printf(out,
+                            "%s:%s\r\n",
+                            header.first.c_str(),
+                            header.second.c_str());
     }
 
     evbuffer_add_printf(out, "\r\n");
-
 }
 
 void WebSocketContext::sendError(int error_code, const std::string& error_message) {
@@ -1048,35 +1189,20 @@ void WebSocketContext::send(evbuffer* buf, const void* raw_data, size_t raw_len,
     // ---- Fast masking (single evbuffer_add) ----
     uint8_t mask_key[4];
 
-    thread_local uint32_t s = 0;
-    if (s == 0) {
-        uint64_t t = static_cast<uint64_t>(time(nullptr));
-        uintptr_t a = reinterpret_cast<uintptr_t>(&s);
-        s = static_cast<uint32_t>((t ^ (t >> 32) ^ a) | 1u);
-    }
+    thread_local std::random_device rd;
 
-    auto next_u32 = [&]() -> uint32_t {
-        s += 0x9E3779B9u;
-        uint32_t z = s;
-        z ^= z >> 16;
-        z *= 0x85EBCA6Bu;
-        z ^= z >> 13;
-        z *= 0xC2B2AE35u;
-        z ^= z >> 16;
-        return z;
-    };
-
-    uint32_t mask32 = next_u32();
-    std::memcpy(mask_key, &mask32, 4);
+    const uint32_t mask32 = static_cast<uint32_t>(rd());
+    std::memcpy(mask_key, &mask32, sizeof(mask_key));
 
     // Write mask key
-    evbuffer_add(out, mask_key, 4);
+    evbuffer_add(out, mask_key, sizeof(mask_key));
 
     // Mask payload into one contiguous buffer, then add once
     static thread_local std::vector<uint8_t> masked;
     masked.resize(payload_len);
 
     const uint8_t* src = payload_ptr;
+
     for (size_t i = 0; i < payload_len; ++i) {
         masked[i] = src[i] ^ mask_key[i & 3];
     }
@@ -1171,6 +1297,7 @@ bool WebSocketContext::rxCompressionEnabled() const {
 void WebSocketContext::onRxPong(std::vector<uint8_t>&& payload) {
     log_debug("Received pong frame (%zu bytes)", payload.size());
     (void)payload;
+    pings_outstanding = 0;
 }
 
 void WebSocketContext::onRxPing(std::vector<uint8_t>&& payload) {
