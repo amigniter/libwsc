@@ -17,8 +17,9 @@ WebSocketClient::~WebSocketClient() {
 }
 
 bool WebSocketClient::isConnected() {
-    if (_ctx) {
-        return _ctx->isConnected();
+    auto ctx = std::atomic_load(&_ctx);
+    if (ctx) {
+        return ctx->isConnected();
     }
     return false;
 }
@@ -106,43 +107,51 @@ void WebSocketClient::enableCompression(bool enable) {
 
 void WebSocketClient::setOpenCallback(OpenCallback callback) {
     open_callback = std::move(callback);
-    if (_ctx) _ctx->setOpenCallback(open_callback);
+    auto ctx = std::atomic_load(&_ctx);
+    if (ctx) ctx->setOpenCallback(open_callback);
 }
 
 void WebSocketClient::setCloseCallback(CloseCallback callback) {
     close_callback = std::move(callback);
-    if (_ctx) _ctx->setCloseCallback(close_callback);
+    auto ctx = std::atomic_load(&_ctx);
+    if (ctx) ctx->setCloseCallback(close_callback);
 }
 
 void WebSocketClient::setErrorCallback(ErrorCallback callback) {
     error_callback = std::move(callback);
-    if (_ctx) _ctx->setErrorCallback(error_callback);
+    auto ctx = std::atomic_load(&_ctx);
+    if (ctx) ctx->setErrorCallback(error_callback);
 }
 
 void WebSocketClient::setMessageCallback(MessageCallback callback) {
     message_callback = std::move(callback);
-    if (_ctx) _ctx->setMessageCallback(message_callback);
+    auto ctx = std::atomic_load(&_ctx);
+    if (ctx) ctx->setMessageCallback(message_callback);
 }
 
 void WebSocketClient::setBinaryCallback(BinaryCallback callback) {
     binary_callback = std::move(callback);
-    if (_ctx) _ctx->setBinaryCallback(binary_callback);
+    auto ctx = std::atomic_load(&_ctx);
+    if (ctx) ctx->setBinaryCallback(binary_callback);
 }
 
 bool WebSocketClient::sendMessage(const std::string& message) {
-    return _ctx && _ctx->sendData(message.data(), message.size(), MessageType::TEXT);
+    auto ctx = std::atomic_load(&_ctx);
+    return ctx && ctx->sendData(message.data(), message.size(), MessageType::TEXT);
 }
 
 bool WebSocketClient::sendMessage(const char* msg, size_t len) {
-    return _ctx && _ctx->sendData(msg, len, MessageType::TEXT);
+    auto ctx = std::atomic_load(&_ctx);
+    return ctx && ctx->sendData(msg, len, MessageType::TEXT);
 }
 
 bool WebSocketClient::sendBinary(const void* data, size_t length) {
-    return _ctx && _ctx->sendData(data, length, MessageType::BINARY);
+    auto ctx = std::atomic_load(&_ctx);
+    return ctx && ctx->sendData(data, length, MessageType::BINARY);
 }
 
 void WebSocketClient::connect() {
-    if (_ctx) {
+    if (std::atomic_load(&_ctx)) {
         return;
     }
 
@@ -166,8 +175,8 @@ void WebSocketClient::connect() {
         if (message_callback) ctx->setMessageCallback(message_callback);
         if (binary_callback) ctx->setBinaryCallback(binary_callback);
 
-        _ctx = ctx;
-        _ctx->start();
+        std::atomic_store(&_ctx, ctx);
+        ctx->start();
 
     } catch (...) {
         // Failed to create or start context.
@@ -176,8 +185,8 @@ void WebSocketClient::connect() {
 }
 
 void WebSocketClient::disconnect() {
-    if (_ctx) {
-        _ctx->stop();
-        _ctx.reset();
+    auto ctx = std::atomic_exchange(&_ctx, std::shared_ptr<WebSocketContext>{});
+    if (ctx) {
+        ctx->stop();
     }
 }
