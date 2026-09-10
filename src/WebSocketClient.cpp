@@ -17,9 +17,6 @@ WebSocketClient::~WebSocketClient() {
 }
 
 bool WebSocketClient::isConnected() {
-    // _ctx is published/cleared from connect()/disconnect() on a different thread
-    // than the senders/isConnected callers (media thread). Access it atomically so
-    // the shared_ptr read never races the reset()/assign (TSan-verified).
     auto ctx = std::atomic_load(&_ctx);
     if (ctx) {
         return ctx->isConnected();
@@ -188,10 +185,6 @@ void WebSocketClient::connect() {
 }
 
 void WebSocketClient::disconnect() {
-    // Atomically take and clear _ctx so a concurrent sendBinary/isConnected
-    // either sees the old context (and keeps it alive via its own shared_ptr
-    // copy) or sees null — never a torn read. stop() (which joins the event
-    // thread) runs OUTSIDE the swap, so it can't deadlock a callback thread.
     auto ctx = std::atomic_exchange(&_ctx, std::shared_ptr<WebSocketContext>{});
     if (ctx) {
         ctx->stop();
