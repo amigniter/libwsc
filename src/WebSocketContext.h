@@ -219,10 +219,7 @@ private:
     struct event *ping_event = nullptr;
     struct event *wakeup_event = nullptr;
 
-    // Heartbeat liveness: number of pings sent since the last pong. Touched only
-    // on the event thread (pingCallback / onRxPong). The connection is declared
-    // dead once this reaches MAX_MISSED_PONGS, detecting a half-open peer that
-    // stopped responding while TCP stayed up.
+    // Ping liveness
     int pings_outstanding = 0;
     static constexpr int MAX_MISSED_PONGS = 2;
 

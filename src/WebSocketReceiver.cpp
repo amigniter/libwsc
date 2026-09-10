@@ -279,7 +279,7 @@ bool WebSocketReceiver::rxInflate(const uint8_t* in, size_t in_len, std::vector<
         
         if (produced) {
             const size_t old = out.size();
-            if (produced > MAX_MESSAGE_SIZE - old) {
+            if (old > MAX_MESSAGE_SIZE || produced > MAX_MESSAGE_SIZE - old) {
                 log_error("permessage-deflate output exceeds %zu bytes; aborting (possible decompression bomb)",
                           static_cast<size_t>(MAX_MESSAGE_SIZE));
                 return false;
@@ -335,9 +335,7 @@ void WebSocketReceiver::onData(evbuffer* buf) {
             return;
         }
 
-        // RFC 7692 §6: the per-message-deflate RSV1 bit may only appear on the
-        // first frame of a message. It is illegal on control frames and on
-        // continuation frames even when compression is negotiated.
+        // RFC 7692: RSV1 is invalid on control and continuation frames.
         if (rsv1 && ((opcode & 0x08) != 0 || opcode == 0x00)) {
             _sinks.onRxProtocolError(1002, "RSV1 set on control or continuation frame");
             return;
@@ -372,9 +370,6 @@ void WebSocketReceiver::onData(evbuffer* buf) {
             return;
         }
 
-        // Bound a single data/continuation frame so a peer-declared 64-bit length
-        // cannot make us buffer (and reserve/copy) unbounded memory before the
-        // frame is even complete. Control frames are already capped at 125 above.
         if ((opcode & 0x08) == 0 && payload_len > MAX_MESSAGE_SIZE) {
             _sinks.onRxProtocolError(1009, "Frame payload too large");
             return;
@@ -428,9 +423,14 @@ void WebSocketReceiver::handleContinuationFrame(const unsigned char* payload, si
         return;
     }
 
-    if (payload_len > MAX_MESSAGE_SIZE - fragmented_message.size()) {
+    const size_t current_size = fragmented_message.size();
+
+    if (current_size > MAX_MESSAGE_SIZE ||
+        payload_len > static_cast<uint64_t>(MAX_MESSAGE_SIZE - current_size))
+    {
         log_error("reassembled message exceeds %zu bytes; aborting",
                   static_cast<size_t>(MAX_MESSAGE_SIZE));
+
         _sinks.onRxProtocolError(1009, "Message too large");
         return;
     }
