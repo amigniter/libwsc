@@ -239,10 +239,11 @@ public:
 private:
     // Connection properties
     std::string host;
-    unsigned short port;
+    unsigned short port = 0;
     std::string uri;
-    bool secure;
-    bool is_ip_address;
+    bool secure = false;
+    bool is_ip_address = false;
+    bool url_valid = false;
     unsigned int ping_interval = 0;
     unsigned int connection_timeout = 1;
     bool compression_requested = true;

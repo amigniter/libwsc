@@ -143,6 +143,20 @@ void WebSocketContext::run() {
     oss << event_tid;
     log_debug("event thread started, tid=%s", oss.str().c_str());*/
 
+    if (!_cfg.url_valid) {
+        connection_state.store(
+            ConnectionState::FAILED,
+            std::memory_order_release
+        );
+
+        sendError(
+            ErrorCode::CONNECT_FAILED,
+            "Invalid WebSocket URL"
+        );
+
+        return;
+    }
+
     if (running.load()) {
         log_debug("Already connected or connecting");
         return;
@@ -257,7 +271,19 @@ void WebSocketContext::run() {
     if (sev) event_add(sev, nullptr);
     else { log_error("Failed to create send_event"); cleanup(); return; }
 
-    
+    /*
+    * stop() may have been called before wakeup_event existed.
+    * In that case requestWakeup() could not notify this thread.
+    */
+    if (stop_requested.load(std::memory_order_acquire)) {
+        connection_state.store(
+            ConnectionState::DISCONNECTED,
+            std::memory_order_release
+        );
+        cleanup();
+        return;
+    }
+
     struct timeval timeout;
     timeout.tv_sec = _cfg.connection_timeout;
     timeout.tv_usec = 0;
@@ -353,6 +379,11 @@ void WebSocketContext::pingCallback(evutil_socket_t /*fd*/, short /*event*/, voi
     auto* self = static_cast<WebSocketContext*>(arg);
     // Heartbeat only runs after the WebSocket upgrade.
     if (!self->upgraded.load(std::memory_order_acquire)) return;
+
+    if (self->connection_state.load(std::memory_order_acquire) !=
+        ConnectionState::CONNECTED) {
+        return;
+    }
 
     // Disconnect after too many unanswered pings.
     if (self->pings_outstanding >= MAX_MISSED_PONGS) {

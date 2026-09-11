@@ -70,6 +70,7 @@ public:
         WebSocketHeaders headers;
         WebSocketTLSOptions tls;
         bool compression_requested;
+        bool url_valid = false;
     };
 
     explicit WebSocketContext(const Config& cfg);

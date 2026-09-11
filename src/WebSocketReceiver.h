@@ -68,6 +68,7 @@ private:
     z_stream deflate_stream{};
     bool inflate_initialized = false;
     bool deflate_initialized = false;
+    bool inflate_output_too_large = false;
     
     std::vector<uint8_t> tx_compressed_buf;
     size_t tx_payload_len = 0;

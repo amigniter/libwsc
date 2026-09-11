@@ -25,6 +25,19 @@ bool WebSocketClient::isConnected() {
 }
 
 void WebSocketClient::setUrl(const std::string& url) {
+    url_valid = false;
+    host.clear();
+    uri.clear();
+    port = 0;
+    secure = false;
+    is_ip_address = false;
+
+    if (url.find('\r') != std::string::npos ||
+        url.find('\n') != std::string::npos ||
+        url.find('\0') != std::string::npos) {
+        return;
+    }
+
     const std::string ws_scheme = "ws://";
     const std::string wss_scheme = "wss://";
 
@@ -43,13 +56,28 @@ void WebSocketClient::setUrl(const std::string& url) {
     std::string hostport = (path_pos == std::string::npos) ? url.substr(pos) : url.substr(pos, path_pos - pos);
 
     size_t colon_pos = hostport.find(':');
+
     if (colon_pos != std::string::npos) {
         host = hostport.substr(0, colon_pos);
+
+        const std::string port_string = hostport.substr(colon_pos + 1);
+
         try {
-            port = std::stoi(hostport.substr(colon_pos + 1));
-        } catch (const std::exception& e) {
+            size_t parsed = 0;
+            const int parsed_port = std::stoi(port_string, &parsed);
+
+            if (parsed != port_string.size() ||
+                parsed_port < 1 ||
+                parsed_port > 65535) {
+                return;
+            }
+
+            port = static_cast<unsigned short>(parsed_port);
+
+        } catch (const std::exception&) {
             return;
         }
+
     } else {
         host = hostport;
         port = secure ? 443 : 80;
@@ -62,6 +90,7 @@ void WebSocketClient::setUrl(const std::string& url) {
     uri = (path_pos == std::string::npos) ? "/" : url.substr(path_pos);
 
     is_ip_address = isHostIPAddress(host);
+    url_valid = true;
 }
 
 bool WebSocketClient::isHostIPAddress(const std::string& host) {
@@ -161,6 +190,7 @@ void WebSocketClient::connect() {
     cfg.uri = uri;
     cfg.secure = secure;
     cfg.is_ip_address = is_ip_address;
+    cfg.url_valid = url_valid;
     cfg.ping_interval = ping_interval;
     cfg.connection_timeout = connection_timeout;
     cfg.headers = extra_headers;

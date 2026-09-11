@@ -215,6 +215,8 @@ bool WebSocketReceiver::txPrepare(const uint8_t* original_ptr, size_t original_l
 }
 
 bool WebSocketReceiver::rxInflate(const uint8_t* in, size_t in_len, std::vector<uint8_t>& out) {
+    inflate_output_too_large = false;
+
     if (!_cfg.enabled || !inflate_initialized) {
         out.assign(in, in + in_len);
         return true;
@@ -282,6 +284,7 @@ bool WebSocketReceiver::rxInflate(const uint8_t* in, size_t in_len, std::vector<
             if (old > MAX_MESSAGE_SIZE || produced > MAX_MESSAGE_SIZE - old) {
                 log_error("permessage-deflate output exceeds %zu bytes; aborting (possible decompression bomb)",
                           static_cast<size_t>(MAX_MESSAGE_SIZE));
+                inflate_output_too_large = true;
                 return false;
             }
             out.resize(old + produced);
@@ -405,6 +408,7 @@ void WebSocketReceiver::onData(evbuffer* buf) {
                 break;
             case 0x0A:
                 log_debug("Received pong frame");
+                _sinks.onRxPong(std::move(payload));
                 break;
             default:
                 log_error("Unknown opcode: %d", opcode);
@@ -456,7 +460,11 @@ void WebSocketReceiver::handleContinuationFrame(const unsigned char* payload, si
         bool ok = decompressMessage(fragmented_message.data(), fragmented_message.size(), output);
         if (!ok) {
             utf8Validator.reset();
-            _sinks.onRxProtocolError(1007, "Decompression failed");
+            if (inflate_output_too_large) {
+                _sinks.onRxProtocolError(1009, "Decompressed message too large");
+            } else {
+                _sinks.onRxProtocolError(1007, "Decompression failed");
+            }
             return;
         }
         fragmented_message.swap(output);
@@ -543,7 +551,11 @@ void WebSocketReceiver::handleDataFrame(const unsigned char* payload, size_t pay
     if (compressed) {
         bool ok = decompressMessage(msg_data, msg_len, decompressed);
         if (!ok) {
-            _sinks.onRxProtocolError(1007, "Decompression failed");
+            if (inflate_output_too_large) {
+                _sinks.onRxProtocolError(1009, "Decompressed message too large");
+            } else {
+                _sinks.onRxProtocolError(1007, "Decompression failed");
+            }
             return;
         }
         msg_data = decompressed.data();
