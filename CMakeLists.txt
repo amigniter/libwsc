@@ -10,12 +10,15 @@ project(libwsc
   LANGUAGES C CXX
 )
 
+include(GNUInstallDirs)
+
 set (CMAKE_CXX_STANDARD 11)
 set (CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(USE_TLS "Enable TLS/SSL support using OpenSSL" OFF)
 option(LIBWSC_USE_DEBUG "Enable debug (verbose) output" OFF)
 option(BUILD_SHARED_LIBS "Build shared libraries instead of static ones" OFF)
+option(LIBWSC_STRIP "Strip symbols from release builds" ON)
 
 set(LIBEVENT_COMPONENTS libevent pthreads)
 
@@ -97,7 +100,7 @@ if (CMAKE_BUILD_TYPE STREQUAL "Release")
   endif()
 endif()
 
-if (CMAKE_BUILD_TYPE STREQUAL "Release" AND CMAKE_STRIP)
+if (LIBWSC_STRIP AND CMAKE_BUILD_TYPE STREQUAL "Release" AND CMAKE_STRIP)
   add_custom_command(TARGET libwsc POST_BUILD
     COMMAND ${CMAKE_STRIP} --strip-unneeded $<TARGET_FILE:libwsc>
     VERBATIM
@@ -105,28 +108,34 @@ if (CMAKE_BUILD_TYPE STREQUAL "Release" AND CMAKE_STRIP)
 endif()
 
 set_target_properties(libwsc PROPERTIES 
-  LINK_FLAGS_RELEASE -s
   PREFIX ""
   VERSION ${PROJECT_VERSION}
   SOVERSION ${PROJECT_VERSION_MAJOR}
 )
 
+if (LIBWSC_STRIP)
+  set_target_properties(libwsc PROPERTIES
+  LINK_FLAGS_RELEASE "-s"
+  )
+endif()
+
+
 install(TARGETS libwsc
   EXPORT libwscTargets
-  ARCHIVE DESTINATION lib
-  LIBRARY DESTINATION lib
-  RUNTIME DESTINATION bin
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
 install(FILES
   ${CMAKE_CURRENT_SOURCE_DIR}/src/WebSocketClient.h
   ${CMAKE_CURRENT_SOURCE_DIR}/src/WebSocketHeaders.h
   ${CMAKE_CURRENT_SOURCE_DIR}/src/WebSocketTLSOptions.h
-  DESTINATION include/libwsc
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/libwsc
 )
 
 install(EXPORT libwscTargets
   FILE libwscConfig.cmake
   NAMESPACE libwsc::
-  DESTINATION lib/cmake/libwsc
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/libwsc
 )
