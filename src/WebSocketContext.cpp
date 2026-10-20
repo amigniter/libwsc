@@ -135,13 +135,19 @@ void WebSocketContext::start() {
     });
 }
 
+void WebSocketContext::setEventThreadId() {
+    std::lock_guard<std::mutex> lock(event_tid_mutex);
+    event_tid = std::this_thread::get_id();
+}
+
+bool WebSocketContext::isEventThread() const {
+    std::lock_guard<std::mutex> lock(event_tid_mutex);
+    return std::this_thread::get_id() == event_tid;
+}
+
 void WebSocketContext::run() {
 
-    event_tid = std::this_thread::get_id();
-
-    /*std::ostringstream oss;
-    oss << event_tid;
-    log_debug("event thread started, tid=%s", oss.str().c_str());*/
+	setEventThreadId();
 
     if (!_cfg.url_valid) {
         connection_state.store(
@@ -327,7 +333,7 @@ void WebSocketContext::stop() {
 
     requestWakeup();
 
-    const bool on_event_thread = (std::this_thread::get_id() == event_tid);
+    const bool on_event_thread = isEventThread();
 
     if (event_thread.joinable()) {
         if (!on_event_thread) {
@@ -459,7 +465,7 @@ inline void WebSocketContext::requestLoopExit() {
     stop_requested.store(true, std::memory_order_release);
 
     // If we're already on the event thread, exit the loop immediately.
-    if (std::this_thread::get_id() == event_tid && base) {
+    if (isEventThread() && base) {
         timeval tv{0, 0};
         event_base_loopexit(base, &tv);
         return;
@@ -1096,7 +1102,7 @@ bool WebSocketContext::sendData(const void* data, size_t length, MessageType typ
 
     // After CONNECTING:
     // Only event thread sends.
-    if (std::this_thread::get_id() == event_tid) {
+    if (isEventThread()) {
         return sendNow(data, length, type);
     }
 
@@ -1349,7 +1355,7 @@ void WebSocketContext::onRxClose(uint16_t code, std::string&& reason)
 
         close(static_cast<int>(code), reason);
         
-        if (std::this_thread::get_id() == event_tid) {
+        if (isEventThread()) {
             flushSendQueue();
         }
     }

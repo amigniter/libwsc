@@ -20,13 +20,16 @@
  * \brief Determines if logs should go to syslog (non-interactive) or console.
  */
 inline bool logger_use_syslog() {
-    static bool initialized = false;
-    static bool use_syslog = false;
-    if (!initialized) {
-        initialized = true;
-        use_syslog = !isatty(STDOUT_FILENO);
-        if (use_syslog) openlog(nullptr, LOG_PID, LOG_DAEMON);
-    }
+    static const bool use_syslog = []() {
+        const bool enabled = !isatty(STDOUT_FILENO);
+
+        if (enabled) {
+            openlog(nullptr, LOG_PID, LOG_DAEMON);
+        }
+
+        return enabled;
+    }();
+
     return use_syslog;
 }
 

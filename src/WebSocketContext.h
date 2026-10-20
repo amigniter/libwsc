@@ -181,7 +181,11 @@ private:
     // Thread/state
     std::thread event_thread;
     std::thread::id event_tid{};
+    mutable std::mutex event_tid_mutex;
     std::atomic_bool running{false};
+
+	void setEventThreadId();
+	bool isEventThread() const;
 
     void sendHandshakeRequest();
 
