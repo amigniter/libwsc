@@ -149,15 +149,14 @@ struct WebSocketServer::Impl {
 			c->pongDeadline = now + std::chrono::seconds(PONG_TIMEOUT_SECONDS);
 		}
 
-		// Dropping connections mutates clients; never erase while iterating it.
+		// Defer removal until after iteration.
 		for (Connection* c : expired) drop(c);
 	}
 
 	static void flushSendQueue(evutil_socket_t, short, void* arg) {
 		Impl* s = static_cast<Impl*>(arg);
 		if (s->stopRequested.load(std::memory_order_acquire)) {
-			// All bufferevents are released on their owning event thread.
-			if (s->heartbeatEvent) event_del(s->heartbeatEvent);
+				if (s->heartbeatEvent) event_del(s->heartbeatEvent);
 			if (s->listener) evconnlistener_disable(s->listener);
 			std::map<ConnectionId, std::unique_ptr<Connection>> remaining;
 			DisconnectCallback cb;
@@ -181,7 +180,6 @@ struct WebSocketServer::Impl {
 			if (cb) {
 				for (ConnectionId id : disconnectedIds) cb(id);
 			}
-			// Exit after the current iteration, not in the middle of a callback.
 			const timeval now = {0, 0};
 			event_base_loopexit(s->base, &now);
 			return;
@@ -221,7 +219,6 @@ struct WebSocketServer::Impl {
 	}
 #ifdef USE_TLS
 	SSL_CTX* sslCtx = nullptr;
-	// Owned by Impl; freed after all TLS bufferevents.
 #endif
 	bool tlsEnabled = false;
 	event_base* base = nullptr;
@@ -248,8 +245,7 @@ struct WebSocketServer::Impl {
 			s->clients.erase(it);
 			cb = s->disconnected;
 		}
-		// Never acquire a libevent bufferevent lock while holding s->mutex.
-		// read()/handshake() can acquire these locks in the opposite order.
+		// Release the connection outside s->mutex to avoid lock inversion.
 		bufferevent_disable(removed->bev, EV_READ | EV_WRITE);
 		bufferevent_setcb(removed->bev, nullptr, nullptr, nullptr, nullptr);
 		bufferevent_free(removed->bev);
@@ -278,7 +274,6 @@ struct WebSocketServer::Impl {
 		}
 		const std::string key = headers["sec-websocket-key"];
 		if (!token(headers["connection"],"upgrade") || lower(headers["upgrade"]) !="websocket"|| headers["sec-websocket-version"] !="13"|| key.size() != 24 || base64_decode(key).size() != 16)return false;
-		// Authenticate before sending HTTP 101. Never log the supplied token.
 		AuthCallback auth;
 		{
 			std::lock_guard<std::mutex> lock(c->owner->mutex);
@@ -290,7 +285,6 @@ struct WebSocketServer::Impl {
 			const std::string& value = authorization->second;
 			if (value.size()>7 && lower(value.substr(0, 7)) =="bearer ") {
 				bearer = value.substr(7);
-				// Bearer credentials cannot contain whitespace.
 				if (bearer.find_first_of(" \t\r\n") != std::string::npos) bearer.clear();
 			}
 		}
@@ -310,7 +304,7 @@ struct WebSocketServer::Impl {
 			c->closing = true;
 			bufferevent_disable(c->bev, EV_READ);
 			return true;
-			// write callback closes after 401 has been flushed
+			// Close after the response is flushed.
 		}
 		const std::string reply ="HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: "+acceptKey(key)+"\r\n\r\n";
 		if (bufferevent_write(c->bev, reply.data(), reply.size()) != 0)return false;
@@ -433,7 +427,6 @@ struct WebSocketServer::Impl {
 	static void socketEvent(bufferevent*, short what, void* arg) {
 		Connection* c = static_cast<Connection*>(arg);
 		if (what & BEV_EVENT_CONNECTED) return;
-		// TLS handshake completed.
 		if (what & (BEV_EVENT_EOF | BEV_EVENT_ERROR | BEV_EVENT_TIMEOUT)) drop(c);
 	}
 	static void accept(evconnlistener*, evutil_socket_t fd, sockaddr*, int, void* arg) {
@@ -471,7 +464,6 @@ struct WebSocketServer::Impl {
 			s->clients[id] = std::move(p);
 		}
 		bufferevent_setcb(bev, &read, &written, &socketEvent, c);
-		// Bound unauthenticated TLS/HTTP handshake duration.
 		const timeval timeout = {15, 0};
 		bufferevent_set_timeouts(bev, &timeout, &timeout);
 		bufferevent_enable(bev, EV_READ|EV_WRITE);
@@ -660,7 +652,7 @@ bool WebSocketServer::listenTLS(const std::string& address, uint16_t port, const
 #endif
 }
 void WebSocketServer::stop() {
-	// stop() must be called by the owner, never from a server callback.
+	// Do not join the event thread from its callbacks.
 	if (impl_->worker.joinable() && impl_->worker.get_id() == std::this_thread::get_id()) return;
 	std::lock_guard<std::mutex> life(impl_->lifecycleMutex);
 	{
@@ -668,11 +660,9 @@ void WebSocketServer::stop() {
 		if (!impl_->worker.joinable()) return;
 		impl_->running = false;
 		impl_->stopRequested.store(true, std::memory_order_release);
-		// The callback runs on the event thread, including connection teardown.
 		event_active(impl_->sendEvent, EV_TIMEOUT, 1);
 	}
 	impl_->worker.join();
-	// No connection objects or bufferevents should remain here.
 	if (impl_->heartbeatEvent) {
 		event_free(impl_->heartbeatEvent);
 		impl_->heartbeatEvent = nullptr;

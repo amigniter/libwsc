@@ -44,33 +44,11 @@ public:
 	void broadcast(const std::string& payload, bool binary = false);
 
 	/**
-	 * @brief Register a Bearer token authentication callback.
+	 * @brief Register the Bearer token validator (required before listen/listenTLS).
 	 *
-	 * The WebSocket server extracts the token from the HTTP
-	 * Authorization header:
-	 *
-	 *     Authorization: Bearer <token>
-	 *
-	 * Authentication is performed before the WebSocket upgrade.
-	 *
-	 * Token generation, storage, validation, and expiration policies
-	 * are entirely the responsibility of the application.
-	 *
-	 * The callback receives the Bearer token and must return:
-	 *   - true  if the token is valid
-	 *   - false if the token is invalid
-	 *
-	 * Connections with missing or invalid tokens receive HTTP 401.
-	 *
-	 * An authentication callback must be registered before starting
-	 * the server. The server will not start without one.
-	 *
-	 * @note The library does not implement any specific token
-	 *       validation mechanism (SHA-256, JWT, Ed25519, etc.).
-	 *       Applications must implement their own validation.
-	 *
-	 * @warning Bearer tokens must be transmitted over WSS when
-	 *          connecting across untrusted networks.
+	 * Receives the token from the Authorization: Bearer header before upgrade.
+	 * Return true to accept the connection, false to reject it with HTTP 401.
+	 * Token validation and storage are application responsibilities.
 	 */
 	void setAuthCallback(AuthCallback callback);
 
