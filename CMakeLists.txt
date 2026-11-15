@@ -6,7 +6,7 @@
 cmake_minimum_required(VERSION 3.10)
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake;${CMAKE_MODULE_PATH}")
 project(libwsc 
-  VERSION 1.1.2
+  VERSION 1.2.0
   LANGUAGES C CXX
 )
 
@@ -19,6 +19,7 @@ option(USE_TLS "Enable TLS/SSL support using OpenSSL" OFF)
 option(LIBWSC_USE_DEBUG "Enable debug (verbose) output" OFF)
 option(BUILD_SHARED_LIBS "Build shared libraries instead of static ones" OFF)
 option(LIBWSC_STRIP "Strip symbols from release builds" ON)
+option(LIBWSC_BUILD_SERVER "Build WebSocket server" OFF)
 
 set(LIBEVENT_COMPONENTS libevent pthreads)
 
@@ -58,6 +59,11 @@ set (LIBWSC_HEADERS
 if (USE_TLS)
     list(APPEND LIBWSC_SOURCES src/WebSocketTLSContext.cpp)
     list(APPEND LIBWSC_HEADERS src/WebSocketTLSContext.h)
+endif()
+
+if(LIBWSC_BUILD_SERVER)
+    list(APPEND LIBWSC_SOURCES src/WebSocketServer.cpp)
+    list(APPEND LIBWSC_HEADERS src/WebSocketServer.h)
 endif()
 
 add_library(libwsc 
@@ -139,3 +145,7 @@ install(EXPORT libwscTargets
   NAMESPACE libwsc::
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/libwsc
 )
+
+if (LIBWSC_BUILD_SERVER)
+  install(FILES src/WebSocketServer.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/libwsc)
+endif()

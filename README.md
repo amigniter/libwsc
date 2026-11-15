@@ -1,15 +1,15 @@
-**libwsc: C++11 WebSocket Client Library**
+**libwsc: C++11 WebSocket Client and Server Library**
 
 [![Autobahn TestSuite](https://img.shields.io/badge/Autobahn-passing-brightgreen)](https://amigniter.github.io/libwsc/autobahn/)
 [![Build libwsc](https://github.com/amigniter/libwsc/actions/workflows/ci.yml/badge.svg)](https://github.com/amigniter/libwsc/actions/workflows/ci.yml)
 
-A lightweight, high-performance and fully-compliant WebSocket client written in C++11.
+A lightweight, high-performance WebSocket client and server library written in C++11.
 
-Written solely for [mod_audio_stream](https://github.com/amigniter/mod_audio_stream) to provide low-latency audio streaming from FreeSWITCH to a WebSocket endpoint.
+Originally written for [mod_audio_stream](https://github.com/amigniter/mod_audio_stream) to provide low-latency audio streaming from FreeSWITCH to a WebSocket endpoint.
 
 Built on libevent; only zlib (for deflate) and OpenSSL (for TLS) are optional extras.
 
-**libwsc** is now offered as a standalone, fully RFC-6455–compliant and [Autobahn Testsuite](https://github.com/crossbario/autobahn-testsuite)-validated asynchronous client library.
+**libwsc** is a standalone asynchronous WebSocket library. Its client implementation has been validated against the [Autobahn Testsuite](https://github.com/crossbario/autobahn-testsuite).
 
 It passes the Autobahn WebSocket Testsuite (including permessage-deflate) with performance comparable to or exceeding common C/C++ clients. You can find the test results [here](https://amigniter.github.io/libwsc/autobahn/index.html). The _examples/autobahn.cpp_ example can be used to run the Autobahn Testsuite locally and reproduce the results.
 
@@ -25,7 +25,7 @@ It passes the Autobahn WebSocket Testsuite (including permessage-deflate) with p
 * CMake-based build for portability
 * **Very small footprint**: ~110 KB stripped shared library on x86_64 Linux (Release)
 
-### What’s new in v1.1.0
+### Client improvements in v1.1.0
 
 * Completely redesigned internal architecture based on an event-driven model
 * Thread-safe client API with internal serialization and state management
@@ -37,6 +37,15 @@ It passes the Autobahn WebSocket Testsuite (including permessage-deflate) with p
   * Public API methods are safe to call from any thread; they enqueue work to the event loop.
   * User callbacks are invoked on the event thread.
   * The context object is managed via `std::shared_ptr` and keeps itself alive while async operations are in flight.
+
+### WebSocket server (new in v1.2.0)
+
+* Optional server build (`LIBWSC_BUILD_SERVER=ON`); the client-only build remains the default.
+* Plain WS and TLS-enabled WSS listeners (`USE_TLS=ON` for TLS support).
+* Bearer token authentication during the HTTP upgrade, before a client is accepted.
+* Connection, message and disconnection callbacks; text/binary `send()` and `broadcast()`.
+* Automatic PING/PONG heartbeat (30-second interval / 10-second timeout).
+* Explicit `stop()` for shutdown (call outside server callbacks).
 
 ## Requirements
 
@@ -50,9 +59,10 @@ It passes the Autobahn WebSocket Testsuite (including permessage-deflate) with p
 ## Further reading
 
 - [BUILDING.md](docs/BUILDING.md) — build flags, prerequisites, install and CMAKE integration
-- [OPTIONS.md](docs/OPTIONS.md) — Additional options
+- [OPTIONS.md](docs/OPTIONS.md) — Client configuration options
+- [SERVER.md](docs/SERVER.md) — Server setup, TLS certificates, authentication and usage
 
-## Example
+## Client example
 
 You can find working demos in the [`examples/`](examples/) folder:
 
@@ -126,6 +136,16 @@ int main() {
 
 ---
 
+## WebSocket server
+
+Since v1.2.0, libwsc includes an optional asynchronous WebSocket server supporting WS/WSS, Bearer authentication, automatic PING/PONG heartbeat, and text/binary messaging.
+
+Enable the server with `LIBWSC_BUILD_SERVER=ON` and TLS support with `USE_TLS=ON`. The server requires an application-provided authentication callback; libwsc extracts the Bearer token but does not decide how it is validated.
+
+See [Server documentation](docs/SERVER.md) for build instructions, TLS certificates, authentication, API usage and manual compilation of the [server example](examples/websocket_server.cpp). The example is not built automatically.
+
+---
+
 ## License
 
-MIT License © 2025 AMSOFTSWITCH LTD.
+MIT License © 2025–2026 AMSOFTSWITCH LTD.
